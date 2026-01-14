@@ -3,6 +3,11 @@ use strict;
 use warnings;
 use File::Spec;
 use File::Basename;
+use Getopt::Std;
+
+# Handle command line options
+our $opt_m;
+getopts('m');
 
 # Define rotation key (e.g., "2+,4-,3-,6+")
 my @rotation_key = ( ['2', '+'], ['4', '-'], ['3', '-'], ['6', '+'] );
@@ -62,6 +67,9 @@ sub process_input {
     my ($in_fh, $out_fh, $log_fh) = @_;
 
     while (my $line = <$in_fh>) {
+        # Skip more prompts if -m option is set
+        next if ($opt_m && $line =~ /^---\(more( \d{1,2}%)?\)---$/);
+        
         chomp $line;
 
         # Sanitize IP addresses
@@ -95,7 +103,7 @@ sub process_input {
         }
 
         # Output the sanitized line
-        print $out_fh "$line\n";
+        print $out_fh "$line\n" if $line =~ /\S/; # Only print lines with non-whitespace characters
     }
 }
 
