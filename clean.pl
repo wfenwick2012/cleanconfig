@@ -5,8 +5,6 @@ use File::Spec;
 use File::Basename;
 use Getopt::Std;
 
-# Handle command line options
-our $opt_m;
 getopts('m');
 
 # Define rotation key (e.g., "2+,4-,3-,6+")
@@ -40,25 +38,45 @@ sub sanitize_ip {
     return join('.', @octets);
 }
 
-# Function to sanitize cryptographic text
-sub sanitize_cryptotext {
-    my ($text, $log_fh) = @_;
-    # Fixed regex
-    $text =~ s/(\$9\$\S\S)(\S{27})(\S)\S/$1$2_$3_/;
-    return $text;
-}
-
 # Function to sanitize SNMP community strings
 sub sanitize_snmp {
     my ($line, $log_fh) = @_;
-    $line =~ s/(snmp community )([A-Za-z0-9_]+)/$1public/;
+    $line =~ s/community \"(\S+)\" \{/community \"OBFUSCATED\" {/;
     return $line;
 }
 
-# Function to sanitize passwords
+# Function to sanitize passwords and hashes
 sub sanitize_password {
     my ($line, $log_fh) = @_;
-    $line =~ s/(encrypted-password )(.)(.{10})(..);/$1X$2$3X;/;
+    
+    # Handle $1$ MD5 hashes
+#    if ($line =~ /(\$1\$[^$]+\$)([^;]+)(;.*)/) {
+#        return $1 . "XXXXXXXXXXXXXXXXXXXX" . $3;
+    if ($line =~ /(^\s+authentication-key \"\$1\$)(..)([^;]+)(..)(\";.*)/) {
+        return $1 . "XX". $3. "XX" . $5;
+    }
+
+    elsif ($line =~ /(^\s+encrypted-password \"\$1\$)(..)([^;]+)(..)(\";.*)/) {
+        return $1 . "XX". $3. "XX" . $5;
+    }
+
+    elsif ($line =~ /(^\s+secret \"\$1\$)(..)([^;]+)(..)(\";.*)/) {
+        return $1 . "XX". $3. "XX" . $5;
+    }
+
+    elsif ($line =~ /(^\s+authentication-key \"\$9\$)(..)([^;]+)(..)(\";.*)/) {
+        return $1 . "XX". $3. "XX" . $5;
+    }
+
+    elsif ($line =~ /(^\s+secret \"\$9\$)(..)([^;]+)(..)(\";.*)/) {
+        return $1 . "XX". $3. "XX" . $5;
+    }
+
+    # Handle simple encrypted passwords
+    elsif ($line =~ /(encrypted-password\s+)(..)([^;]+)(..)(;.*)/) {
+        return $1 . "XX". $3. "XX" . $5;
+    }
+    
     return $line;
 }
 
@@ -68,7 +86,7 @@ sub process_input {
 
     while (my $line = <$in_fh>) {
         # Skip more prompts if -m option is set
-        next if ($opt_m && $line =~ /^---\(more( \d{1,2}%)?\)---$/);
+        next if ($Getopt::Std::opt_m && $line =~ /---\(more( \d{1,2}%)?\)---/);
         
         chomp $line;
 
@@ -81,23 +99,17 @@ sub process_input {
             $line =~ s/\Q$ip\E/$sanitized_ip/g;
         }
 
-        # Sanitize passwords
-        if ($line =~ /(encrypted-password .+)/) {
-            print $log_fh "Found encrypted-password field...\n";
+        # Sanitize passwords and hashes
+        if ($line =~ /encrypted-password|(\$[19]\$)/) {
             $line = sanitize_password($line, $log_fh);
-        }
-
-        # Sanitize cryptographic text (e.g., `$9$` hashes)
-        if ($line =~ /(\$9\$\S{1}[A-Za-z0-9\/\.]{29})/) {
-            my $cryptotext = $1;
-            print $log_fh "Found cryptographic hash:     $cryptotext\n";
-            my $sanitized_cryptotext = sanitize_cryptotext($cryptotext, $log_fh);
-            print $log_fh "Crypto hash sanitized to:     $sanitized_cryptotext\n";
-            $line =~ s/\Q$cryptotext\E/$sanitized_cryptotext/g;
+           #print $log_fh "Obfuscating password/hash field $line ...\n";
+           # substitution in parentheses and uses the /r flag to return the modified string without affecting original
+            print $log_fh "Obfuscating password/hash field " . ($line =~ s/^\s+//r) . " ...\n";
+            $line =~ s/\#\# SECRET-DATA/\#\# SECRET-DATA-OBFUSCATED/g;
         }
 
         # Sanitize SNMP community strings
-        if ($line =~ /(snmp community .+)/) {
+        if ($line =~ /(community .+)/) {
             print $log_fh "Found SNMP community string...\n";
             $line = sanitize_snmp($line, $log_fh);
         }
@@ -117,7 +129,7 @@ if (-p STDIN || -t STDIN != 1) {
 }
 else {
     # Processing directory
-    my $input_dir = File::Spec->catdir('..', 'CSR', 'CSR', 'in-situ-configs');
+    my $input_dir = File::Spec->catdir('.', 'CSR', 'CSR', 'in-situ-configs');
     my $output_dir = 'sanitized_configs';
 
     # Create output directory if it doesn't exist
