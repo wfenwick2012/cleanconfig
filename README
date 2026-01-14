@@ -1,0 +1,8 @@
+clean.pl removes sensitive (sanitize) information from Juniper router configuration files.
+Usage: clean.pl [options] < input_file > output_file
+   or: clean.pl [options] (for directory processing)
+
+Options:
+  -m    Skip more prompts
+  -a    Do not rotate IP addresses (default: rotate IP address)
+  -h    Display this help message
