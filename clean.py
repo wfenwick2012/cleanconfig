@@ -99,7 +99,11 @@ def process_input(in_fh, out_fh, log_fh, args):
         if re.search(r'(community .+)', line):
             print("Found SNMP community string...", file=log_fh)
             line = sanitize_snmp(line, log_fh)
-        
+ 
+        if re.search(r'(trap-group .+)', line):
+            print("Found SNMP trap community string...", file=log_fh)
+            line = sanitize_snmp(line, log_fh)
+         
         # Output the sanitized line
         if re.search(r'\S', line):  # Only print lines with non-whitespace characters
             print(line, file=out_fh)
