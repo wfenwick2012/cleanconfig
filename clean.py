@@ -17,10 +17,31 @@ ROTATION_KEY = [('2', '+'), ('4', '-'), ('3', '-'), ('6', '+')]
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description='Removes sensitive (sanitize) information from Juniper router configuration files.')
+        description='Sanitizes information from Juniper router configuration piped on stdin, or the directory provided as the first argument.',
+        # Add an epilog to explain the operating modes
+        epilog="""
+Usage Modes:
+  1. Piped Input (stdin/stdout):
+     Reads configuration data from stdin.
+     Writes sanitized configuration to stdout.
+     Writes log information to 'sanitize.log' in the current directory.
+     Example: cat my_config.txt | ./%(prog)s -a
+
+  2. Directory Mode (default):
+     If no input is piped via stdin, the script runs in directory mode.
+     This mode (which is what you asked about as the 'first argument' behavior)
+     is the default action when run without piped input.
+     Reads files from: ./in_situ_configs/
+     Writes sanitized files to: ./sanitized_configs/
+     Writes log files to: ./sanitized_configs/
+""",
+        # Use RawDescriptionHelpFormatter to preserve newlines in the epilog
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument('-m', action='store_true', help='Skip more prompts')
     parser.add_argument('-a', action='store_true', help='Rotate IP addresses (default: no rotation)')
     return parser.parse_args()
+
 
 def rotate_octet(octet, bits, direction):
     """Rotate an octet (8-bit integer)"""
@@ -71,6 +92,46 @@ def sanitize_password(line, log_fh):
     
     return line
 
+
+def sanitize_ssh_pub_key(line, log_fh):
+    """Sanitize ssh public key"""
+    
+    # Pattern:
+    # Group 1: (^\s+ssh-rsa\s+"ssh-rsa\s+) - The prefix
+    # Group 2: (\S+)                       - The entire base64 key
+    # Group 3: (.*)                       - The optional comment (e.g., " jenkins@...")
+    # Group 4: (";)                       - The closing quote and semicolon
+    pattern = r'(^\s+ssh-rsa\s+"ssh-rsa\s+)(\S+)(.*)(";)'
+
+    def replacer(match):
+        prefix  = match.group(1)
+        key     = match.group(2)
+        comment = match.group(3) # Will be ' jenkins@...' or ''
+        suffix  = match.group(4)
+
+        # Apply Python slicing to the key
+        if len(key) > 20: # Make sure key is reasonably long
+            first_part = key[:10]  # First 10 chars
+            last_part  = key[-10:] # Last 10 chars
+            obfuscated_key = f"{first_part}XXX...XXX{last_part}"
+        else:
+            obfuscated_key = "OBFUSCATED" # Key is too short, just hide it
+        
+        print(f"Obfuscating SSH public key...", file=log_fh)
+        
+        # Rebuild the line, adding our own obfuscation comment
+        return f"{prefix}{obfuscated_key}{comment}{suffix} ## SSH-PUBLIC-KEY-OBFUSCATED"
+
+    # Check if the line matches before doing anything
+    if re.search(pattern, line):
+        # Run the replacement
+        line = re.sub(pattern, replacer, line)
+        # Remove the original "## SECRET-DATA" tag if it exists
+        line = line.replace("## SECRET-DATA", "")
+        return line
+        
+    return line
+  
 def process_input(in_fh, out_fh, log_fh, args):
     """Process a single input stream"""
     for line in in_fh:
@@ -103,8 +164,12 @@ def process_input(in_fh, out_fh, log_fh, args):
         if re.search(r'(trap-group .+)', line):
             print("Found SNMP trap community string...", file=log_fh)
             line = sanitize_snmp(line, log_fh)
-         
+        
+        if "ssh-rsa" in line:
+            print("Found SSH public key string...", file=log_fh)
+            line = sanitize_ssh_pub_key(line, log_fh)         
         # Output the sanitized line
+        
         if re.search(r'\S', line):  # Only print lines with non-whitespace characters
             print(line, file=out_fh)
 
@@ -119,7 +184,7 @@ def main():
         print("Sanitization complete. Logs written to sanitize.log.", file=sys.stderr)
     else:
         # Processing directory
-        input_dir = Path('.') / 'CSR' / 'CSR' / 'in-situ-configs'
+        input_dir = Path('.') / 'in_situ_configs'
         output_dir = Path('sanitized_configs')
         
         # Create output directory if it doesn't exist
