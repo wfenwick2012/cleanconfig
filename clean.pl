@@ -4,8 +4,32 @@ use warnings;
 use File::Spec;
 use File::Basename;
 use Getopt::Std;
+#
+# clean6.pl
+# Removes sensitive (sanitize) information from Juniper router configuration files
+# runs in Cygwin for Windows (Perl 5 interpreter)
+# (c)2025 wynn.fenwick@telus.com
+# TELUS CONFIDENTIAL
+#
+our ($opt_m, $opt_a, $opt_h);
+getopts('mah');
 
-getopts('m');
+# New function to display usage information
+sub display_usage {
+    print "$0 removes sensitive (sanitize) information from Juniper router configuration files.\n";
+    print "Usage: $0 [options] < input_file > output_file\n";
+    print "   or: $0 [options] (for directory processing)\n\n";
+    print "Options:\n";
+    print "  -m    Skip more prompts\n";
+    print "  -a    Rotate IP addresses (default: no rotation)\n";
+    print "  -h    Display this help message\n";
+}
+
+# Check if -h option is used, if so, display usage and exit
+if ($opt_h) {
+    display_usage();
+    exit 0;
+}
 
 # Define rotation key (e.g., "2+,4-,3-,6+")
 my @rotation_key = ( ['2', '+'], ['4', '-'], ['3', '-'], ['6', '+'] );
@@ -30,9 +54,11 @@ sub sanitize_ip {
     my ($ip, $log_fh) = @_;
     my @octets = split(/\./, $ip);
 
-    for my $i (0..3) {
-        my ($bits, $direction) = @{$rotation_key[$i]};
-        $octets[$i] = rotate_octet($octets[$i], $bits, $direction);
+    if ($opt_a) {
+        for my $i (0..3) {
+            my ($bits, $direction) = @{$rotation_key[$i]};
+            $octets[$i] = rotate_octet($octets[$i], $bits, $direction);
+        }
     }
 
     return join('.', @octets);
@@ -50,8 +76,6 @@ sub sanitize_password {
     my ($line, $log_fh) = @_;
     
     # Handle $1$ MD5 hashes
-#    if ($line =~ /(\$1\$[^$]+\$)([^;]+)(;.*)/) {
-#        return $1 . "XXXXXXXXXXXXXXXXXXXX" . $3;
     if ($line =~ /(^\s+authentication-key \"\$1\$)(..)([^;]+)(..)(\";.*)/) {
         return $1 . "XX". $3. "XX" . $5;
     }
@@ -86,7 +110,7 @@ sub process_input {
 
     while (my $line = <$in_fh>) {
         # Skip more prompts if -m option is set
-        next if ($Getopt::Std::opt_m && $line =~ /---\(more( \d{1,2}%)?\)---/);
+        next if ($opt_m && $line =~ /---\(more( \d{1,2}%)?\)---/);
         
         chomp $line;
 
@@ -102,8 +126,6 @@ sub process_input {
         # Sanitize passwords and hashes
         if ($line =~ /encrypted-password|(\$[19]\$)/) {
             $line = sanitize_password($line, $log_fh);
-           #print $log_fh "Obfuscating password/hash field $line ...\n";
-           # substitution in parentheses and uses the /r flag to return the modified string without affecting original
             print $log_fh "Obfuscating password/hash field " . ($line =~ s/^\s+//r) . " ...\n";
             $line =~ s/\#\# SECRET-DATA/\#\# SECRET-DATA-OBFUSCATED/g;
         }
@@ -120,7 +142,7 @@ sub process_input {
 }
 
 # Check if we're receiving input from stdin
-if (-p STDIN || -t STDIN != 1) {
+if (-p STDIN || ! -t STDIN) {  # Detects both pipe and file redirection
     # Processing from stdin
     open my $log_fh, '>', 'sanitize.log' or die "Cannot open sanitize.log: $!";
     process_input(\*STDIN, \*STDOUT, $log_fh);
