@@ -4,13 +4,6 @@ use warnings;
 use File::Spec;
 use File::Basename;
 
-# Directory containing the router configurations
-my $input_dir = File::Spec->catdir('..', 'CSR', 'CSR', 'in-situ-configs');
-my $output_dir = 'sanitized_configs';
-
-# Create output directory if it doesn't exist
-mkdir $output_dir unless -d $output_dir;
-
 # Define rotation key (e.g., "2+,4-,3-,6+")
 my @rotation_key = ( ['2', '+'], ['4', '-'], ['3', '-'], ['6', '+'] );
 
@@ -45,7 +38,7 @@ sub sanitize_ip {
 # Function to sanitize cryptographic text
 sub sanitize_cryptotext {
     my ($text, $log_fh) = @_;
-    # Fixed the regex here
+    # Fixed regex
     $text =~ s/(\$9\$\S\S)(\S{27})(\S)\S/$1$2_$3_/;
     return $text;
 }
@@ -64,18 +57,9 @@ sub sanitize_password {
     return $line;
 }
 
-# Process each file in the input directory
-opendir(my $dh, $input_dir) || die "Can't open $input_dir: $!";
-while (my $filename = readdir($dh)) {
-    next if $filename =~ /^\./;  # Skip hidden files and directories
-
-    my $input_file = File::Spec->catfile($input_dir, $filename);
-    my $output_file = File::Spec->catfile($output_dir, "sanitized_$filename");
-    my $log_file = File::Spec->catfile($output_dir, "log_$filename.log");
-
-    open my $in_fh, '<', $input_file or die "Cannot open $input_file: $!";
-    open my $out_fh, '>', $output_file or die "Cannot open $output_file: $!";
-    open my $log_fh, '>', $log_file or die "Cannot open $log_file: $!";
+# Function to process a single input stream
+sub process_input {
+    my ($in_fh, $out_fh, $log_fh) = @_;
 
     while (my $line = <$in_fh>) {
         chomp $line;
@@ -113,13 +97,46 @@ while (my $filename = readdir($dh)) {
         # Output the sanitized line
         print $out_fh "$line\n";
     }
-
-    close $in_fh;
-    close $out_fh;
-    close $log_fh;
-
-    print "Processed $filename. Sanitized output written to $output_file and logs written to $log_file.\n";
 }
-closedir($dh);
 
-print "All files processed. Sanitized configs are in the '$output_dir' directory.\n";
+# Check if we're receiving input from stdin
+if (-p STDIN || -t STDIN != 1) {
+    # Processing from stdin
+    open my $log_fh, '>', 'sanitize.log' or die "Cannot open sanitize.log: $!";
+    process_input(\*STDIN, \*STDOUT, $log_fh);
+    close $log_fh;
+    print STDERR "Sanitization complete. Logs written to sanitize.log.\n";
+}
+else {
+    # Processing directory
+    my $input_dir = File::Spec->catdir('..', 'CSR', 'CSR', 'in-situ-configs');
+    my $output_dir = 'sanitized_configs';
+
+    # Create output directory if it doesn't exist
+    mkdir $output_dir unless -d $output_dir;
+
+    # Process each file in the input directory
+    opendir(my $dh, $input_dir) || die "Can't open $input_dir: $!";
+    while (my $filename = readdir($dh)) {
+        next if $filename =~ /^\./;  # Skip hidden files and directories
+
+        my $input_file = File::Spec->catfile($input_dir, $filename);
+        my $output_file = File::Spec->catfile($output_dir, "sanitized_$filename");
+        my $log_file = File::Spec->catfile($output_dir, "log_$filename.log");
+
+        open my $in_fh, '<', $input_file or die "Cannot open $input_file: $!";
+        open my $out_fh, '>', $output_file or die "Cannot open $output_file: $!";
+        open my $log_fh, '>', $log_file or die "Cannot open $log_file: $!";
+
+        process_input($in_fh, $out_fh, $log_fh);
+
+        close $in_fh;
+        close $out_fh;
+        close $log_fh;
+
+        print "Processed $filename. Sanitized output written to $output_file and logs written to $log_file.\n";
+    }
+    closedir($dh);
+
+    print "All files processed. Sanitized configs are in the '$output_dir' directory.\n";
+}
