@@ -21,7 +21,7 @@ sub display_usage {
     print "   or: $0 [options] (for directory processing)\n\n";
     print "Options:\n";
     print "  -m    Skip more prompts\n";
-    print "  -a    Rotate IP addresses (default: no rotation)\n";
+    print "  -a    Do not rotate IP addresses (default: rotate IP address)\n";
     print "  -h    Display this help message\n";
 }
 
@@ -31,14 +31,14 @@ if ($opt_h) {
     exit 0;
 }
 
-# Define rotation key (e.g., "2+,4-,3-,6+")
+# Define rotation key n bits right (+) or left (-) (e.g., "2+,4-,3-,6+")
 my @rotation_key = ( ['2', '+'], ['4', '-'], ['3', '-'], ['6', '+'] );
 
 # Function to rotate an octet (8-bit integer)
 sub rotate_octet {
     my ($octet, $bits, $direction) = @_;
     
-    return $octet if $octet < 0 || $octet > 255;  # Sanity check
+#    return $octet if $octet < 0 || $octet > 255;  # Sanity check
 
     if ($direction eq "+") {
         # Rotate right
@@ -54,7 +54,7 @@ sub sanitize_ip {
     my ($ip, $log_fh) = @_;
     my @octets = split(/\./, $ip);
 
-    if ($opt_a) {
+    if (!$opt_a) {
         for my $i (0..3) {
             my ($bits, $direction) = @{$rotation_key[$i]};
             $octets[$i] = rotate_octet($octets[$i], $bits, $direction);
@@ -133,6 +133,10 @@ sub process_input {
         # Sanitize SNMP community strings
         if ($line =~ /(community .+)/) {
             print $log_fh "Found SNMP community string...\n";
+            $line = sanitize_snmp($line, $log_fh);
+        }
+        if ($line =~ /(trap-group .+)/) {
+            print $log_fh "Found SNMP trap community string...\n";
             $line = sanitize_snmp($line, $log_fh);
         }
 
