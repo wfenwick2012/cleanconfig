@@ -6,8 +6,8 @@ import argparse
 from pathlib import Path
 
 """
-clean6.py
-Removes sensitive (sanitize) information from Juniper router configuration files
+clean9.py
+Sanitizes information from Juniper router configuration piped on stdin, else reads files from ./in_situ_configs/
 (c)2025 wynn.fenwick@telus.com
 TELUS CONFIDENTIAL
 """
@@ -17,7 +17,7 @@ ROTATION_KEY = [('2', '+'), ('4', '-'), ('3', '-'), ('6', '+')]
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description='Sanitizes information from Juniper router configuration piped on stdin, or the directory provided as the first argument.',
+        description='Sanitizes information from Juniper router configuration piped on stdin, else reads files from ./in_situ_configs/',
         # Add an epilog to explain the operating modes
         epilog="""
 Usage Modes:
@@ -72,25 +72,43 @@ def sanitize_ip(ip, args, log_fh):
     return '.'.join(octets)
 
 def sanitize_snmp(line, log_fh):
-    """Sanitize SNMP community strings"""
-    return re.sub(r'community "(\S+)" \{', 'community "OBFUSCATED" {', line)
+    """
+    Sanitize SNMP community strings, handling both quoted and unquoted strings,
+    and preserving context for strings longer than 4 characters.
+    """
+    
+    # Pattern groups:
+    # 1: (community ) - The literal "community " prefix
+    # 2: (")?           - An optional opening quote
+    # 3: (\S+)          - The community string content
+    # 4: (\2)           - Matches the same as group 2 (the optional quote)
+    # 5: ( \{)          - The literal " {" suffix
+    pattern = r'(community )("?)(\S+)(\2)( \{)'
 
-def sanitize_password(line, log_fh):
-    """Sanitize passwords and hashes"""
-    patterns = [
-        (r'(^\s+authentication-key "\$1\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
-        (r'(^\s+encrypted-password "\$1\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
-        (r'(^\s+secret "\$1\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
-        (r'(^\s+authentication-key "\$9\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
-        (r'(^\s+secret "\$9\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
-        (r'(encrypted-password\s+)(..)([^;]+)(..)(;.*)', r'\1XX\3XX\5')
-    ]
-    
-    for pattern, replacement in patterns:
-        if re.search(pattern, line):
-            return re.sub(pattern, replacement, line)
-    
-    return line
+    def replacer(match):
+        # Extract the captured parts
+        prefix  = match.group(1)  # 'community '
+        quote1  = match.group(2)  # '"' or ''
+        content = match.group(3)  # 'my-secret-string'
+        quote2  = match.group(4)  # '"' or ''
+        suffix  = match.group(5)  # ' {'
+
+        # Use Python logic to decide how to obfuscate
+        if len(content) <= 4:
+            # String is too short, apply "first 1, XXX" logic
+            first_two = content[:1]
+            obfuscated_content = f"{first_two}XXX"
+            
+        else:
+            # Apply "first 2, last 2" logic
+            first_two = content[:2]
+            last_two  = content[-2:]
+            obfuscated_content = f"{first_two}XXX{last_two}"
+            
+        # Rebuild the line
+        return f"{prefix}{quote1}{obfuscated_content}{quote2}{suffix}"
+
+    return re.sub(pattern, replacer, line)
 
 
 def sanitize_ssh_pub_key(line, log_fh):
@@ -131,7 +149,25 @@ def sanitize_ssh_pub_key(line, log_fh):
         return line
         
     return line
-  
+
+def sanitize_password(line, log_fh):
+    """Sanitize passwords and hashes"""
+    patterns = [
+        (r'(^\s+authentication-key "\$1\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
+        (r'(^\s+encrypted-password "\$1\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
+        (r'(^\s+secret "\$1\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
+        (r'(^\s+authentication-key "\$9\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
+        (r'(^\s+secret "\$9\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
+        (r'( secret "\$9\$)(..)([^;]+)(..)(\";.*)', r'\1XX\3XX\5'),
+        (r'(encrypted-password\s+)(..)([^;]+)(..)(;.*)', r'\1XX\3XX\5')
+    ]
+    
+    for pattern, replacement in patterns:
+        if re.search(pattern, line):
+            return re.sub(pattern, replacement, line)
+    
+    return line
+
 def process_input(in_fh, out_fh, log_fh, args):
     """Process a single input stream"""
     for line in in_fh:
@@ -149,6 +185,11 @@ def process_input(in_fh, out_fh, log_fh, args):
             sanitized_ip = sanitize_ip(ip, args, log_fh)
             print(f"IP address sanitized to: {sanitized_ip}", file=log_fh)
             line = line.replace(ip, sanitized_ip)
+            
+        #sanitize SSH public keys (paranoid yes)
+        if "ssh-rsa" in line:
+            print("Found SSH public key string...", file=log_fh)
+            line = sanitize_ssh_pub_key(line, log_fh)         
         
         # Sanitize passwords and hashes
         if re.search(r'encrypted-password|(\$[19]\$)', line):
@@ -164,12 +205,8 @@ def process_input(in_fh, out_fh, log_fh, args):
         if re.search(r'(trap-group .+)', line):
             print("Found SNMP trap community string...", file=log_fh)
             line = sanitize_snmp(line, log_fh)
-        
-        if "ssh-rsa" in line:
-            print("Found SSH public key string...", file=log_fh)
-            line = sanitize_ssh_pub_key(line, log_fh)         
+         
         # Output the sanitized line
-        
         if re.search(r'\S', line):  # Only print lines with non-whitespace characters
             print(line, file=out_fh)
 
